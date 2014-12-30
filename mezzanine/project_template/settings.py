@@ -97,6 +97,7 @@ MANAGERS = ADMINS
 
 # Hosts/domain names that are valid for this site; required if DEBUG is False
 # See https://docs.djangoproject.com/en/1.5/ref/settings/#allowed-hosts
+# Note that the first entry is used for site_name in fabfile.py
 ALLOWED_HOSTS = []
 
 # Local time zone for this installation. Choices can be found here:
@@ -123,6 +124,7 @@ LANGUAGES = (
 # A boolean that turns on/off debug mode. When set to ``True``, stack traces
 # are displayed for error pages. Should always be set to ``False`` in
 # production. Best set to ``True`` in local_settings.py
+# Consider socket.gethostname() and the server's name to auto-set DEBUG 
 DEBUG = False
 
 # Whether a user's session cookie expires when the Web browser is closed.
@@ -160,28 +162,6 @@ STATICFILES_FINDERS = (
 FILE_UPLOAD_PERMISSIONS = 0o644
 
 
-#############
-# DATABASES #
-#############
-
-DATABASES = {
-    "default": {
-        # Add "postgresql_psycopg2", "mysql", "sqlite3" or "oracle".
-        "ENGINE": "django.db.backends.",
-        # DB name or path to database file if using sqlite3.
-        "NAME": "",
-        # Not used with sqlite3.
-        "USER": "",
-        # Not used with sqlite3.
-        "PASSWORD": "",
-        # Set to empty string for localhost. Not used with sqlite3.
-        "HOST": "",
-        # Set to empty string for default. Not used with sqlite3.
-        "PORT": "",
-    }
-}
-
-
 #########
 # PATHS #
 #########
@@ -191,8 +171,13 @@ import os
 # Full filesystem path to the project.
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# Name of the directory for the project.
-PROJECT_DIRNAME = PROJECT_ROOT.split(os.sep)[-1]
+# Name of the directory for the project. PROJECT_NAME must be unique so
+# it may be necessary to give it a different name than PROJECT_DIRNAME 
+PROJECT_NAME = PROJECT_DIRNAME = PROJECT_ROOT.split(os.sep)[-1]
+
+# Using getcreds assumes a CREDS_DIR in which all secrets are kept safe
+from .getcreds import getcreds
+CREDS_DIR = os.path.join("~", "creds", PROJECT_NAME)
 
 # Every cache key will get prefixed with this value - here we set it to
 # the name of the directory the project is in to try and use something
@@ -226,6 +211,31 @@ ROOT_URLCONF = "%s.urls" % PROJECT_DIRNAME
 # Always use forward slashes, even on Windows.
 # Don't forget to use absolute paths, not relative paths.
 TEMPLATE_DIRS = (os.path.join(PROJECT_ROOT, "templates"),)
+
+
+#############
+# DATABASES #
+#############
+
+dbhost = getcreds('db.host', credsdir=CREDS_DIR)
+
+DATABASES = {
+    "default": {
+        # Add "postgresql_psycopg2", "mysql", "sqlite3" or "oracle".
+        "ENGINE": "django.db.backends.",
+        # DB name or path to database file if using sqlite3.
+        "NAME": PROJECT,
+        # Not used with sqlite3.
+        "USER": dbhost[0],
+        # Not used with sqlite3.
+        "PASSWORD": dbhost[1],
+        # Set to empty string for localhost. Not used with sqlite3.
+        "HOST": dbhost[2],
+        # Set to empty string for default. Not used with sqlite3.
+        "PORT": dbhost[3],
+    }
+}
+
 
 
 ################
@@ -318,18 +328,22 @@ OPTIONAL_APPS = (
 # These settings are used by the default fabfile.py provided.
 # Check fabfile.py for defaults.
 
+SECRET_KEY = getcreds('django.secret', credsdir=CREDS_DIR)[0]
+NEVERCACHE_KEY = getcreds('nocache.secret', credsdir=CREDS_DIR)[0]
+
 # FABRIC = {
 #     "SSH_USER": "", # SSH username for host deploying to
 #     "HOSTS": ALLOWED_HOSTS[:1], # List of hosts to deploy to (eg, first host)
 #     "DOMAINS": ALLOWED_HOSTS, # Domains for public site
 #     "REPO_URL": "ssh://hg@bitbucket.org/user/project", # Project's repo URL
+#     "CLONE": "clone", # "checkout" used for svn or "clone" for git/hg
 #     "VIRTUALENV_HOME":  "", # Absolute remote path for virtualenvs
-#     "PROJECT_NAME": "", # Unique identifier for project
+#     "PROJECT_NAME": PROJECT_NAME, # Unique identifier for project
 #     "REQUIREMENTS_PATH": "requirements.txt", # Project's pip requirements
 #     "GUNICORN_PORT": 8000, # Port gunicorn will listen on
 #     "LOCALE": "en_US.UTF-8", # Should end with ".UTF-8"
-#     "DB_PASS": "", # Live database password
-#     "ADMIN_PASS": "", # Live admin user password
+#     "DB_PASS": dbhost[1], # Live database password
+#     "ADMIN_PASS": dbhost[1], # Live admin user password
 #     "SECRET_KEY": SECRET_KEY,
 #     "NEVERCACHE_KEY": NEVERCACHE_KEY,
 # }

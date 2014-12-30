@@ -58,6 +58,10 @@ env.locale = conf.get("LOCALE", "en_US.UTF-8")
 env.secret_key = conf.get("SECRET_KEY", "")
 env.nevercache_key = conf.get("NEVERCACHE_KEY", "")
 
+# Use "clone" for git/hg or "checkout" for svn from settings.FABRIC
+env.clone = conf.get("CLONE", "clone")
+# site_name can be used in /etc/nginx/sites-available/<site-name>.conf
+env.site_name = conf.get("ALLOWED_HOSTS",[env.proj_name])[0]
 
 ##################
 # Template setup #
@@ -70,7 +74,10 @@ env.nevercache_key = conf.get("NEVERCACHE_KEY", "")
 templates = {
     "nginx": {
         "local_path": "deploy/nginx.conf",
-        "remote_path": "/etc/nginx/sites-enabled/%(proj_name)s.conf",
+        # I prefer site_name over proj_name but that's just me.
+        # Ubuntu likes symbolic links from sites-available
+        "remote_path": "/etc/nginx/sites-available/%(site_name)s.conf",
+        # So deploy requires sudo ln -s <available> <enabled> right here
         "reload_command": "service nginx restart",
     },
     "supervisor": {
@@ -273,6 +280,9 @@ def postgres(command):
     Runs the given command as the postgres user.
     """
     show = not command.startswith("psql")
+    # My system demands passwords - haven't figured out how to
+    # automate that. So echo some prompts so I get them correct
+    run("echo sudo password followed by postgres password", show=True)
     return run("sudo -u root sudo -u postgres %s" % command, show=show)
 
 
@@ -282,6 +292,8 @@ def psql(sql, show=True):
     Runs SQL against the project's database.
     """
     out = postgres('psql -c "%s"' % sql)
+    # another prompt for my benefit
+    run("echo postgres password", show=True)
     if show:
         print_command(sql)
     return out
@@ -353,6 +365,8 @@ def install():
         "postgresql libpq-dev memcached supervisor")
     sudo("easy_install pip")
     sudo("pip install virtualenv mercurial")
+    if env.clone == "checkout":
+        sudo("apt-get install subversion -y -q")
 
 
 @task
@@ -366,6 +380,8 @@ def create():
     """
 
     # Create virtualenv
+    # Found this was necessary
+    run("mkdir -p %s" % env.venv_home)
     with cd(env.venv_home):
         if exists(env.proj_name):
             prompt = input("\nVirtualenv exists: %s"
@@ -377,7 +393,10 @@ def create():
             remove()
         run("virtualenv %s --distribute" % env.proj_name)
         vcs = "git" if env.git else "hg"
-        run("%s clone %s %s" % (vcs, env.repo_url, env.proj_path))
+        # But check to see how old-fashioned we are
+        if not env.clone == "clone": 
+            vcs = "svn" 
+        run("%s %s %s %s" % (vcs, env.clone, env.repo_url, env.proj_path))
 
     # Create DB and DB user.
     pw = db_pass()
@@ -409,6 +428,11 @@ def create():
                 else:
                     upload_template(crt_local, crt_file, use_sudo=True)
                     upload_template(key_local, key_file, use_sudo=True)
+            # I put my cert and key into the following locations
+            # sudo("mv %s/%s /etc/ssl/certs" % (conf_path, crt_file))
+            # sudo("mv %s/%s /etc/ssl/private" % (conf_path, key_file))
+            # My conf_path is empty on Ubuntu 14.04
+
 
     # Set up project.
     upload_template_and_reload("settings")
@@ -474,6 +498,10 @@ def restart():
         sudo("supervisorctl start %s:gunicorn_%s" % start_args)
 
 
+# LCOMMIT const is used in deploy() and rollback() instead of repeating
+# the same string everywhere
+LCOMMIT = "last.commit"
+
 @task
 @log_call
 def deploy():
@@ -484,6 +512,21 @@ def deploy():
     collect any new static assets, and restart gunicorn's work
     processes for the project.
     """
+ 
+    def svnrev(url=env.repo_url):
+        """If using svn, write out the last svn commit revision number."""
+        os.system("svn info -r HEAD %s > %s" % (url, LCOMMIT))
+        rev = None
+        with open("%s" % LCOMMIT, "r") as lastrev:
+            for item in lastrev.readlines():
+                if "Last Changed Rev:" in item:
+                    rev = item.split(":")[-1].strip()
+                    break
+        if rev is not None:
+            with open("%s" % LCOMMIT, "w") as lastrev:
+                lastrev.write(rev)
+        return rev
+
     if not exists(env.venv_path):
         prompt = input("\nVirtualenv doesn't exist: %s"
                        "\nWould you like to create it? (yes/no) "
@@ -500,10 +543,16 @@ def deploy():
         if exists(static_dir):
             run("tar -cf last.tar %s" % static_dir)
         git = env.git
-        last_commit = "git rev-parse HEAD" if git else "hg id -i"
-        run("%s > last.commit" % last_commit)
+        if env.clone == "clone":
+            last_commit = "git rev-parse HEAD" if git else "hg id -i"
+            run("%s > %s" % (last_commit, LCOMMIT))
+        else:
+            run("echo %s > %s" % (svnrev(), LCOMMIT))
         with update_changed_requirements():
-            run("git pull origin master -f" if git else "hg pull && hg up -C")
+            if env.clone == "clone":
+                run("git pull origin master -f" if git else "hg pull && hg up -C")
+            else:
+                run("svn up")
         manage("collectstatic -v 0 --noinput")
         manage("syncdb --noinput")
         manage("migrate --noinput")
@@ -524,7 +573,9 @@ def rollback():
     with project():
         with update_changed_requirements():
             update = "git checkout" if env.git else "hg up -C"
-            run("%s `cat last.commit`" % update)
+            if not env.clone == "clone":
+                update = "svn up -r"
+            run("%s `cat %s`" % (update, LCOMMIT))
         with cd(join(static(), "..")):
             run("tar -xf %s" % join(env.proj_path, "last.tar"))
         restore("last.db")
