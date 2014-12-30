@@ -77,7 +77,8 @@ templates = {
         # I prefer site_name over proj_name but that's just me.
         # Ubuntu likes symbolic links from sites-available
         "remote_path": "/etc/nginx/sites-available/%(site_name)s.conf",
-        # So deploy requires sudo ln -s <available> <enabled> right here
+        "enable_command": "ln -s /etc/nginx/sites-available/%(site_name)s.conf " \
+                          "/etc/nginx/sites-enabled",
         "reload_command": "service nginx restart",
     },
     "supervisor": {
@@ -223,6 +224,7 @@ def upload_template_and_reload(name):
         project_root = os.path.dirname(os.path.abspath(__file__))
         local_path = os.path.join(project_root, local_path)
     remote_path = template["remote_path"]
+    enable_command = template.get("enable_command")
     reload_command = template.get("reload_command")
     owner = template.get("owner")
     mode = template.get("mode")
@@ -245,6 +247,8 @@ def upload_template_and_reload(name):
         sudo("chown %s %s" % (owner, remote_path))
     if mode:
         sudo("chmod %s %s" % (mode, remote_path))
+    if enable_command:
+        sudo(enable_command)
     if reload_command:
         sudo(reload_command)
 
